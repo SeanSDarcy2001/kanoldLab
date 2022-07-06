@@ -1,5 +1,8 @@
 info = audioinfo('sound_files/rufus.m4a');
 [y,Fs] = audioread('sound_files/rufus.m4a');
+disp(Fs)
+y = resample(y, 6, 1);
+Fs = 260417;
 t = 0:seconds(1/Fs):seconds(info.Duration);
 %t = t(1:end-1);
 %t = t(Fs:2*Fs);
