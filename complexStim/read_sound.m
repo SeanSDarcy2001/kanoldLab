@@ -6,8 +6,8 @@ for k = 1: length(files)
     fullFileName = fullfile("wavs/", baseFileName);
     fprintf('Now reading %s\n', fullFileName)
     [wave, Fs] = audioread(fullFileName);
-    stimulus = Stim;
-    stimulus.wave = wave;
-    stimulus.ID = k;
-    save(['stims/',num2str(k),'.mat'], 'stimulus')
+    s = Stim;
+    s.wave = wave;
+    s.ID = k;
+    save(['stims/',num2str(k),'.mat'], 's')
 end
