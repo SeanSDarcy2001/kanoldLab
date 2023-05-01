@@ -17,6 +17,8 @@ from sklearn import svm
 from sklearn.inspection import DecisionBoundaryDisplay
 from scipy import stats
 import itertools
+from sklearn.manifold import TSNE
+from sklearn.cluster import KMeans
 
 class analyzeTheData:
 
@@ -50,7 +52,8 @@ class analyzeTheData:
 
         self.shade_alpha      = 0.2
         self.lines_alpha      = 0.8
-        self.pal = sns.color_palette('husl', 9)
+        #self.pal = sns.color_palette('husl', 9)
+        self.pal = [(44/256, 123/256, 182/256), (171/256, 217/256, 233/256), (255/256, 255/256, 191/256), (253/256, 174/256, 97/256), (215/256, 25/256, 28/256)]
         #%config InlineBackend.figure_format = 'svg'
 
 
@@ -543,3 +546,425 @@ class analyzeTheData:
         nam = "confusion_matrix" + str(pcscape)
         plt.savefig(Path(self.output_dir, nam))
 
+    def onsetOffset(self) :
+        meanToneTraces = np.zeros([self.Nneurons, 5, self.trials[0].shape[1]])
+        selective = 0
+        onset = 0
+        offset = 0
+        print(self.Nneurons, "neurons.")
+        for neuron in range(self.Nneurons):
+            for t, ind in enumerate(self.t_type_ind):
+                ind = list(ind)
+                x = np.zeros((self.trials[0].shape[1]))
+                k = 0
+                for indeces in ind :
+                    x = np.add(x, self.trials[indeces][neuron, :])
+                    k = k + 1
+                x = x/k
+                meanToneTraces[neuron, t, :] = x
+        selectiveNeurons = []
+        for neuron in range(self.Nneurons):
+            maxResponse = np.argmax(np.mean(meanToneTraces[neuron, :, 20:40], axis=1))
+            tempOthers = np.zeros([4, self.trials[0].shape[1]]) #can compare selective trace to other average tone trace
+            for i in range(5) :
+                if i != maxResponse and i == 4:
+                    tempOthers[i - 1, :] = meanToneTraces[neuron, i, :]
+                elif i != maxResponse : 
+                    tempOthers[i, :] = meanToneTraces[neuron, i, :] 
+
+            if np.mean(meanToneTraces[neuron, maxResponse, 20:40]) > 2*np.std(tempOthers[:, :]) : #not the best way to pick selective neurons
+                selective = selective + 1
+                selectiveNeurons.append([neuron, meanToneTraces[neuron, maxResponse, :], maxResponse] )
+        
+        print(selective, "selective neurons.")
+
+        types = np.zeros([selective, 1]) #num selective neurons by onset/offset characterization
+        for i in range(selective) :
+            toPlot = selectiveNeurons[i]
+            if np.max(toPlot[1]) > 8.5 :
+                toPlot = selectiveNeurons[i - 1] #did this to cut out noisy neurons, lost one good onset
+                #if np.argmax(toPlot[1]) <= 26 : #this threshold was set based on peak shape
+                #if toPlot[1][18] > 3*np.std(toPlot[1][0:15]):
+            if np.mean(toPlot[1][20:30]) > np.mean(toPlot[1][30:40]):
+                onset = onset + 1
+                types[i] = 1 #one is onset
+            else :
+                offset = offset + 1
+                types[i] = 0 #0 is offset
+        print(onset, "onset.", offset, "offset.")
+        for t, ind in enumerate(self.t_type_ind):
+            f, axes = plt.subplots(1, 2, figsize=[10, 2.8], sharey=False,sharex=True)
+            for ax in axes:
+                self.add_stim_to_plot(ax)
+            print("Tone:", self.trial_types[t])
+            numOn = 0
+            numOff = 0
+            for i in range(selective) :
+                toPlot = selectiveNeurons[i]
+                if np.max(toPlot[1]) > 8.5 :
+                    toPlot = selectiveNeurons[i - 1] #again, this needs to be modified
+                tone = toPlot[2]
+                type = types[i]
+                if t == tone :
+                    if type == 1 :
+                        plt.subplot(1, 2, 1)
+                        plt.plot(np.linspace(0, 67, 68),toPlot[1], 'g')
+                        numOn += 1
+                    else :
+                        plt.subplot(1, 2, 2)
+                        plt.plot(np.linspace(0, 67, 68),toPlot[1], 'b')
+                        numOff += 1
+            print(numOn, "onset.", numOff, "offset.")
+            plt.subplot(1, 2, 1)
+            plt.title("Onset Neurons")
+            plt.xlabel("frame")
+            plt.ylabel("dF/F")
+            plt.subplot(1, 2, 2)
+            plt.title("Offset Neurons")
+            plt.xlabel("frame")
+            plt.ylabel("dF/F")
+            nam = "on_off_" + self.trial_types[t]
+            plt.savefig(Path(self.output_dir, nam))
+    
+    def tsne(self) :
+        #Xr = np.vstack([t[:, frames_pre_stim:frames_pre_stim+20].max(axis=1) for t in trials]).T
+        Xr = np.vstack([t[:, self.frames_pre_stim:self.frames_post_stim].mean(axis=1) for t in self.trials]).T
+        Xr_sc = self.z_score(Xr)
+        #X_embedded = TSNE(n_components=2, perplexity=15, early_exaggeration=8, learning_rate=3, init="random").fit_transform(Xr_sc.T)
+        X_embedded = TSNE(n_components=2, perplexity=25, early_exaggeration=2, learning_rate=15, init="random").fit_transform(Xr_sc.T)
+        fig = plt.figure(figsize=[9, 4])
+        for t, ind in enumerate(self.t_type_ind):
+            plt.scatter(X_embedded[ind, 0], X_embedded[ind, 1], c=self.pal[t], s=25, alpha=0.8)
+
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+        self.add_orientation_legend(fig.get_axes()[0])
+        nam = "tsne"
+        plt.savefig(Path(self.output_dir, nam))
+
+        fig = plt.figure(figsize=[12, 3])
+        plt.subplot(1, 2, 1)
+        for t, ind in enumerate(self.t_type_ind):
+            plt.scatter(X_embedded[ind, 0], X_embedded[ind, 1], c=self.pal[t], s=25, alpha=0.8)
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+        self.add_orientation_legend(fig.get_axes()[0])
+        pca = PCA(n_components=15)
+        Xp = pca.fit_transform(Xr_sc.T).T
+        projections = [(0, 1)] #projections = [(2, 0), (2, 1), (2, 3), (2, 4), (2,5)]
+        counter = 0
+        xhats = np.zeros((1, 200, 2))
+        plt.subplot(1, 2, 2)
+        for proj in projections:
+            print("PCs:", proj)
+            for t, t_type in enumerate(self.trial_types):
+                print("t_type:", t_type)
+                x = Xp[proj[0], self.t_type_ind[t]]
+                y = Xp[proj[1], self.t_type_ind[t]]
+                
+                xhats[counter, self.t_type_ind[t], 0] = x
+                xhats[counter, self.t_type_ind[t], 1] = y
+
+                plt.scatter(x, y, c=self.pal[t], s=25, alpha=0.8)
+                plt.xlabel('PC {}'.format(proj[0]+1))
+                plt.ylabel('PC {}'.format(proj[1]+1))
+            counter = counter + 1 #for dataset
+        plt.title("PCA Projected Data")
+        self.add_orientation_legend(fig.get_axes()[0])
+        nam = "pca_vs_tsne"
+        plt.savefig(Path(self.output_dir, nam))
+
+        #now do kmeans classification
+        centers_init = np.zeros([5, 2])
+        for t, ind in enumerate(self.t_type_ind):
+            centers_init[t, :] = np.mean(X_embedded[ind, :], axis = 0)
+        kmeans = KMeans(n_clusters=5, random_state=0, init = centers_init).fit(X_embedded)
+
+        fig = plt.figure(figsize=[15, 6])
+        for t, ind in enumerate(self.t_type_ind):
+            plt.subplot(1, 3, 1)
+            plt.scatter(X_embedded[ind, 0], X_embedded[ind, 1], c=self.pal[t], s=25, alpha=0.8)
+            plt.subplot(1, 3, 2)
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c=self.pal[kmeans.labels_[indeces]], s=25, alpha=0.8)
+
+        plt.subplot(1, 3, 1)
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+
+        plt.subplot(1, 3, 2)
+        plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], c='black', marker='x', s=50, alpha=0.8)
+        plt.title("K-Means Classification of Projected Data")
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+
+        acc_labels = np.zeros(len(kmeans.labels_))
+
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                if kmeans.labels_[indeces] == t :
+                    acc_labels[indeces] = 1
+            
+        y = np.ones(len(acc_labels))
+        cdict = {0.0: 'red', 1.0: 'green'}
+        plt.subplot(1, 3, 3)
+        plt.xlabel("Component 1")
+        plt.ylabel("Component 2")
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c = cdict[acc_labels[indeces]], s = 25)
+        print(accuracy_score(y, acc_labels))
+        plt.title("Classification Accuracy:" + str(accuracy_score(y, acc_labels)))
+        nam = "kmeans"
+        plt.savefig(Path(self.output_dir, nam))
+    
+        
+    
+    def tsne2(self) :
+        Xr = np.vstack([t[:, self.frames_pre_stim:self.frames_post_stim].mean(axis=1) for t in self.trials]).T
+        print(Xr.shape)
+        Xr_sc = self.z_score(Xr)
+        X_embedded = TSNE(n_components=2, perplexity=25, early_exaggeration=3, learning_rate=15, init="random").fit_transform(Xr_sc.T)
+        fig = plt.figure(figsize=[9, 4])
+        ax = plt.gca()
+        ax.set_facecolor((210/256, 210/256, 210/256))
+        for t, ind in enumerate(self.t_type_ind):
+            for a, indexes in enumerate(ind):
+                if a < 10 :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=80, alpha=1.0)
+                elif a < 20 :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=40, alpha=0.8)
+                elif a < 30 :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=20, alpha=0.6)
+                else :
+                     plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=10, alpha=0.6)
+
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+        self.add_orientation_legend(fig.get_axes()[0])
+
+        ###SAVE
+        nam = "tsneWatten"
+        plt.savefig(Path(self.output_dir, nam))
+
+        plt.figure(figsize=[12, 3])
+        plt.subplot(1, 2, 1)
+        ax = plt.gca()
+        ax.set_facecolor((210/256, 210/256, 210/256))
+        for t, ind in enumerate(self.t_type_ind):
+            for a, indexes in enumerate(ind):
+                if a < 10 : 
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=80, alpha=1.0)
+                elif a < 20 :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=40, alpha=0.8)
+                elif a < 30 :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=20, alpha=0.6)
+                else :
+                    plt.scatter(X_embedded[indexes, 0], X_embedded[indexes, 1], c=self.pal[t], s=10, alpha=0.6)
+
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+        pca = PCA(n_components=15)
+        Xp = pca.fit_transform(Xr_sc.T).T
+        projections = [(0, 1)] #projections = [(2, 0), (2, 1), (2, 3), (2, 4), (2,5)]
+        counter = 0
+        xhats = np.zeros((1, 200, 2)) #change if no baseline
+
+        plt.subplot(1, 2, 2)
+        ax = plt.gca()
+        ax.set_facecolor((210/256, 210/256, 210/256))
+
+
+        for proj in projections:
+            print("PCs:", proj)
+            for t, t_type in enumerate(self.trial_types):
+                print("t_type:", t_type)
+                x = Xp[proj[0], self.t_type_ind[t]]
+                y = Xp[proj[1], self.t_type_ind[t]]
+                
+                xhats[counter, self.t_type_ind[t], 0] = x
+                xhats[counter, self.t_type_ind[t], 1] = y
+
+                plt.scatter(x, y, c=self.pal[t], s=25, alpha=0.8)
+                plt.xlabel('PC {}'.format(proj[0]+1))
+                plt.ylabel('PC {}'.format(proj[1]+1))
+
+        plt.title("PCA Projected Data")
+        self.add_orientation_legend(fig.get_axes()[0])
+        ###SAVE
+        nam = "tsne_pca_compare"
+        plt.savefig(Path(self.output_dir, nam))
+
+        ##DO kmeans
+
+        #no bl
+        centers_init = np.zeros([5, 2])
+        for t, ind in enumerate(self.t_type_ind):
+            centers_init[t, :] = np.mean(X_embedded[ind, :], axis = 0)
+        kmeans = KMeans(n_clusters=5, random_state=0, init = centers_init).fit(X_embedded)
+
+
+        fig = plt.figure(figsize=[17, 6])
+        for t, ind in enumerate(self.t_type_ind):
+            plt.subplot(1, 3, 1)
+            plt.scatter(X_embedded[ind, 0], X_embedded[ind, 1], c=self.pal[t], s=25, alpha=0.8)
+            plt.subplot(1, 3, 2)
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c=self.pal[kmeans.labels_[indeces]], s=25, alpha=0.8)
+    
+
+        plt.subplot(1, 3, 1)
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+
+        plt.subplot(1, 3, 2)
+        plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], c='black', marker='x', s=50, alpha=0.8)
+        plt.title("K-Means Classification of Projected Data")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+
+        #for tone classif
+        acc_labels = np.zeros(len(kmeans.labels_))
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                if kmeans.labels_[indeces] == t :
+                    acc_labels[indeces] = 1
+
+        y = np.ones(len(acc_labels))
+        cdict = {0.0: 'red', 1.0: 'green'}
+        plt.subplot(1, 3, 3)
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c = cdict[acc_labels[indeces]], s = 25)
+
+        print(accuracy_score(y, acc_labels))
+        plt.title("Classification Accuracy:" + str(accuracy_score(y, acc_labels)))
+        ##SAVE
+        nam = "KM_tones"
+        plt.savefig(Path(self.output_dir, nam))
+        
+        ##SAVEFIG
+
+        ##GET CM for TONE CLASS
+        ytrue = np.zeros((200))
+        for t, ind in enumerate(self.t_type_ind):
+            ytrue[ind] = t
+
+        print(ytrue)
+        print(kmeans.labels_)
+
+        cm = confusion_matrix(ytrue, kmeans.labels_)
+        plt.figure()
+        plt.xlabel("Predicted Tone")
+        plt.ylabel("True Tone")
+        plt.imshow(cm)
+        for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+            plt.text(j, i, cm[i, j], horizontalalignment="center")
+        plt.colorbar()
+        plt.yticks([0, 1, 2, 3, 4], ["4 kHz", "8 kHz", "16 kHz", "32 kHz", "64 kHz"])
+        plt.xticks([0, 1, 2, 3, 4], ["4 kHz", "8 kHz", "16 kHz", "32 kHz", "64 kHz"])
+        print('Accuracy:', str(accuracy_score(ytrue, kmeans.labels_)))
+        plt.title("Confusion Matrix: Accuracy = " + str(accuracy_score(ytrue, kmeans.labels_)))
+        nam = "confusion_matrix" 
+        ##SAVE FIG
+        ##SAVE
+        nam = "CM_tones"
+        plt.savefig(Path(self.output_dir, nam))
+
+        ##KMEANS 20 CLASSES
+        centers_init = np.zeros([20, 2])
+        print(X_embedded.shape)
+        for i in range(centers_init.shape[0]) :
+            centers_init[i, :] = X_embedded[10*i:10*i + 10, :].mean(axis=0)
+        kmeans = KMeans(n_clusters=20, random_state=0, init=centers_init).fit(X_embedded)
+
+
+        fig = plt.figure(figsize=[17, 6])
+        for t, ind in enumerate(self.t_type_ind):
+            plt.subplot(1, 3, 1)
+            plt.scatter(X_embedded[ind, 0], X_embedded[ind, 1], c=self.pal[t], s=25, alpha=0.8)
+            plt.subplot(1, 3, 2)
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c=self.pal[t], s=25, alpha=0.8)
+
+        plt.subplot(1, 3, 1)
+        plt.title("t-SNE Projected Data")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+
+        plt.subplot(1, 3, 2)
+        plt.scatter(kmeans.cluster_centers_[:, 0], kmeans.cluster_centers_[:, 1], c='black', marker='x', s=50, alpha=0.8)
+        plt.title("Projected Data with Cluster Centers")
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+
+        #create GT for 20 class proble,
+        ytrue = np.zeros((200))
+        counter = 0
+        indCount = 0
+        for t, ind in enumerate(self.t_type_ind):
+            for k in range(4) :
+                for rep in range(10) :
+                    ytrue[indCount] = counter
+                    indCount = indCount + 1
+                counter = counter + 1
+        
+        #evaluate acc, label points as correct/inc
+        acc_labels = np.zeros(len(kmeans.labels_))
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                if kmeans.labels_[indeces] == ytrue[indeces] :
+                    acc_labels[indeces] = 1
+
+        y = np.ones(len(acc_labels))
+
+        cdict = {0.0: 'red', 1.0: 'green'}
+        plt.subplot(1, 3, 3)
+        plt.xlabel("Latent Component 1")
+        plt.ylabel("Latent Component 2")
+        for t, ind in enumerate(self.t_type_ind):
+            for indeces in ind :
+                plt.scatter(X_embedded[indeces, 0], X_embedded[indeces, 1], c = cdict[acc_labels[indeces]], s = 25)
+
+        print(accuracy_score(y, acc_labels))
+        plt.title("Classification Accuracy:" + str(accuracy_score(y, acc_labels)))
+        ##SAVE
+        nam = "KM_20classes"
+        plt.savefig(Path(self.output_dir, nam))
+
+        
+        cm = confusion_matrix(ytrue, kmeans.labels_)
+        plt.figure(figsize = [8,8])
+        plt.xlabel("Predicted Tone/Atten")
+        plt.ylabel("True Tone/Atten")
+        plt.imshow(cm)
+        for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+            plt.text(j, i, cm[i, j], horizontalalignment="center")
+        plt.colorbar()
+        plt.yticks([0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19], 
+                        ["4 kHz, 0 dB", "4 kHz, 20 dB", "4 kHz, 40 dB", "4 kHz, 60 dB", 
+                         "8 kHz, 0 dB", "8 kHz, 20 dB", "8 kHz, 40 dB", "8 kHz, 60 dB",
+                         "16 kHz, 0 dB", "16 kHz, 20 dB", "16 kHz, 40 dB", "16 kHz, 60 dB",
+                         "32 kHz, 0 dB", "32 kHz, 20 dB", "32 kHz, 40 dB", "32 kHz, 60 dB",
+                         "64 kHz, 0 dB", "64 kHz, 20 dB", "64 kHz, 40 dB", "64 kHz, 60 dB"])
+        plt.xticks([0,4,8,12,16], ["4 kHz", "8 kHz", "16 kHz", "32 kHz", "64 kHz"])
+#pval = stats.binom_test(testTrials * accuracy_score(y_test, y_pred), n=testTrials, p=.2, alternative='greater')
+        print('Accuracy:', str(accuracy_score(ytrue, kmeans.labels_)))
+#print("P-Value:", pval)
+        plt.title("Confusion Matrix: Accuracy = " + str(accuracy_score(ytrue, kmeans.labels_)))
+        ##SAVE
+        nam = "CM_20classes"
+        plt.savefig(Path(self.output_dir, nam))
+        
+
+
+
+        
